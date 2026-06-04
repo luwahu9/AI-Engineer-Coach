@@ -7,6 +7,7 @@
 
 import * as fs from 'fs';
 import { Workspace, Session } from './types';
+import type { SessionSource } from './cache';
 import { findClaudeDirs, parseClaudeSessions, parseClaudeSessionsAsync } from './parser-claude';
 import { findCodexDirs, parseCodexSessions } from './parser-codex';
 import { findOpenCodeDirs, parseOpenCodeSessions } from './parser-opencode';
@@ -89,6 +90,32 @@ export function hasExternalHarnessSources(): boolean {
   // working directory, which could report false positives. Bail out instead.
   if (!process.env.HOME && !process.env.USERPROFILE) return false;
   return findClaudeDirs().length > 0 || findCodexDirs().length > 0 || findOpenCodeDirs().length > 0;
+}
+
+/**
+ * Register the on-disk source file for external-harness sessions that carry one,
+ * so lazy re-reads (image extraction for the Coding Moments gallery, full-text
+ * session detail) can find the raw bytes stripped from the in-memory model.
+ *
+ * Only single-file harnesses set `sourceFilePath` — currently Claude Code, whose
+ * sessions are self-contained `*.jsonl` files. Codex / OpenCode sessions carry no
+ * source path and are skipped (they reference no images, so the gallery never
+ * needs to re-read them). Call after each external-harness collection pass.
+ */
+export function registerExternalHarnessSources(
+  sessions: Session[],
+  sessionSourceIndex: Map<string, SessionSource>,
+): void {
+  for (const s of sessions) {
+    if (!s.sourceFilePath) continue;
+    sessionSourceIndex.set(s.sessionId, {
+      kind: 'claude-session-file',
+      filePath: s.sourceFilePath,
+      workspaceId: s.workspaceId,
+      workspaceName: s.workspaceName,
+      harness: s.harness,
+    });
+  }
 }
 
 export function collectExternalHarnessesSync(workspaces: WorkspaceMap, sessions: Session[]): void {

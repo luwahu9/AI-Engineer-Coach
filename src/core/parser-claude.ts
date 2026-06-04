@@ -620,7 +620,7 @@ function buildClaudeRequest(
   });
 }
 
-function parseClaudeSessionFile(filePath: string, wsId: string, wsName: string): Session | null {
+export function parseClaudeSessionFile(filePath: string, wsId: string, wsName: string): Session | null {
   assertTrustedPath(filePath);
   let raw: string;
   try {
@@ -678,5 +678,6 @@ function parseClaudeSessionFile(filePath: string, wsId: string, wsName: string):
     workspaceRootPath: cwd || undefined,
     launcherKind,
     entrypoint,
+    sourceFilePath: filePath,
   });
 }

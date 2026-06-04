@@ -11,7 +11,17 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { describe, it, expect } from 'vitest';
-import { hasExternalHarnessSources } from './parser-harnesses';
+import { hasExternalHarnessSources, registerExternalHarnessSources } from './parser-harnesses';
+import type { SessionSource } from './cache';
+import type { Session } from './types';
+
+function makeSession(over: Partial<Session>): Session {
+  return {
+    sessionId: 's1', workspaceId: 'w1', workspaceName: 'proj', location: 'terminal',
+    harness: 'Claude', creationDate: 0, lastMessageDate: 0, requestCount: 0, requests: [],
+    ...over,
+  };
+}
 
 function setEnv(key: 'HOME' | 'USERPROFILE', value: string | undefined): void {
   if (value === undefined) delete process.env[key]; else process.env[key] = value;
@@ -62,5 +72,28 @@ describe('hasExternalHarnessSources', () => {
       setEnv('HOME', prevHome);
       setEnv('USERPROFILE', prevUserProfile);
     }
+  });
+});
+
+describe('registerExternalHarnessSources', () => {
+  it('registers a single-file harness session keyed by its on-disk source path', () => {
+    const index = new Map<string, SessionSource>();
+    registerExternalHarnessSources(
+      [makeSession({ sessionId: 'c1', harness: 'Claude', sourceFilePath: '/home/me/.claude/projects/p/c1.jsonl' })],
+      index,
+    );
+    expect(index.get('c1')).toEqual({
+      kind: 'claude-session-file',
+      filePath: '/home/me/.claude/projects/p/c1.jsonl',
+      workspaceId: 'w1',
+      workspaceName: 'proj',
+      harness: 'Claude',
+    });
+  });
+
+  it('skips sessions that carry no source file path (e.g. Codex / OpenCode)', () => {
+    const index = new Map<string, SessionSource>();
+    registerExternalHarnessSources([makeSession({ sessionId: 'x1', harness: 'Codex' })], index);
+    expect(index.has('x1')).toBe(false);
   });
 });
