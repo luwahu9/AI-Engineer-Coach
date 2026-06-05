@@ -12,6 +12,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { describe, it, expect } from 'vitest';
 import { hasExternalHarnessSources, registerExternalHarnessSources } from './parser-harnesses';
+import { createRequest } from './parser-shared';
 import type { SessionSource } from './cache';
 import type { Session } from './types';
 
@@ -95,5 +96,53 @@ describe('registerExternalHarnessSources', () => {
     const index = new Map<string, SessionSource>();
     registerExternalHarnessSources([makeSession({ sessionId: 'x1', harness: 'Codex' })], index);
     expect(index.has('x1')).toBe(false);
+  });
+
+  it('registers an image-bearing subagent request under a <sessionId>::<requestId> key pointing at the subagent file', () => {
+    const index = new Map<string, SessionSource>();
+    const subagentImageReq = createRequest({
+      requestId: 'sub-img', messageText: 'see this', responseText: '',
+      variableKinds: { image: 1 },
+      sourceFilePath: '/home/me/.claude/projects/p/parent/subagents/agent-1.jsonl',
+    });
+    registerExternalHarnessSources(
+      [makeSession({
+        sessionId: 'parent', harness: 'Claude',
+        sourceFilePath: '/home/me/.claude/projects/p/parent.jsonl',
+        requests: [subagentImageReq],
+      })],
+      index,
+    );
+    // Parent still registered by sessionId -> parent file
+    expect(index.get('parent')?.filePath).toBe('/home/me/.claude/projects/p/parent.jsonl');
+    // Subagent image request registered under the composite key -> subagent file
+    expect(index.get('parent::sub-img')).toEqual({
+      kind: 'claude-session-file',
+      filePath: '/home/me/.claude/projects/p/parent/subagents/agent-1.jsonl',
+      workspaceId: 'w1',
+      workspaceName: 'proj',
+      harness: 'Claude',
+    });
+  });
+
+  it('does not add a composite key for requests in the session file or without images', () => {
+    const index = new Map<string, SessionSource>();
+    const sameFileReq = createRequest({
+      requestId: 'same', messageText: '', responseText: '',
+      variableKinds: { image: 1 }, sourceFilePath: '/p/parent.jsonl',
+    });
+    const noImageReq = createRequest({
+      requestId: 'noimg', messageText: '', responseText: '',
+      variableKinds: {}, sourceFilePath: '/p/parent/subagents/a.jsonl',
+    });
+    registerExternalHarnessSources(
+      [makeSession({
+        sessionId: 'parent', harness: 'Claude', sourceFilePath: '/p/parent.jsonl',
+        requests: [sameFileReq, noImageReq],
+      })],
+      index,
+    );
+    expect(index.has('parent::same')).toBe(false);
+    expect(index.has('parent::noimg')).toBe(false);
   });
 });

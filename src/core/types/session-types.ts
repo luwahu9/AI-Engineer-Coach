@@ -83,6 +83,13 @@ export interface SessionRequest {
   todoSnapshot: TodoItem[] | null;
   /** Precomputed work-type classification (feature, bug fix, refactor, etc.) */
   workType: string;
+  /** Absolute path to the on-disk file holding this request's image bytes, when
+   *  that differs from its session's `sourceFilePath`. Set on Claude subagent
+   *  requests rolled up into a parent session: their bytes stay in their own
+   *  `subagents/agent-*.jsonl` file, so image extraction must read that file
+   *  rather than the parent's. `undefined` for ordinary requests, which fall
+   *  back to the session source. */
+  sourceFilePath?: string;
   /** Reasoning / thinking effort for reasoning-capable models, when known.
    *  Sources:
    *    - Copilot CLI: `session.start.data.reasoningEffort` and `session.model_change.data.reasoningEffort`

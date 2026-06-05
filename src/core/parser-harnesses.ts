@@ -101,20 +101,39 @@ export function hasExternalHarnessSources(): boolean {
  * sessions are self-contained `*.jsonl` files. Codex / OpenCode sessions carry no
  * source path and are skipped (they reference no images, so the gallery never
  * needs to re-read them). Call after each external-harness collection pass.
+ *
+ * Subagent image requests are a special case: parseClaudeSessions merges them
+ * into their parent session, but their bytes stay in a different file
+ * (`<session>/subagents/agent-*.jsonl`). Those carry their own request-level
+ * `sourceFilePath`, and are indexed under a `<sessionId>::<requestId>` composite
+ * key so image extraction reads the subagent file, not the parent. Only
+ * image-bearing requests get an entry, keeping the serialized index small.
  */
 export function registerExternalHarnessSources(
   sessions: Session[],
   sessionSourceIndex: Map<string, SessionSource>,
 ): void {
   for (const s of sessions) {
-    if (!s.sourceFilePath) continue;
-    sessionSourceIndex.set(s.sessionId, {
-      kind: 'claude-session-file',
-      filePath: s.sourceFilePath,
-      workspaceId: s.workspaceId,
-      workspaceName: s.workspaceName,
-      harness: s.harness,
-    });
+    if (s.sourceFilePath) {
+      sessionSourceIndex.set(s.sessionId, {
+        kind: 'claude-session-file',
+        filePath: s.sourceFilePath,
+        workspaceId: s.workspaceId,
+        workspaceName: s.workspaceName,
+        harness: s.harness,
+      });
+    }
+    for (const r of s.requests) {
+      if (!r.sourceFilePath || r.sourceFilePath === s.sourceFilePath) continue;
+      if ((r.variableKinds.image ?? 0) <= 0) continue;
+      sessionSourceIndex.set(`${s.sessionId}::${r.requestId}`, {
+        kind: 'claude-session-file',
+        filePath: r.sourceFilePath,
+        workspaceId: s.workspaceId,
+        workspaceName: s.workspaceName,
+        harness: s.harness,
+      });
+    }
   }
 }
 
