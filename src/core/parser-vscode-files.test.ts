@@ -279,6 +279,21 @@ describe('extractSessionImages (Claude content blocks)', () => {
       expect(extractSessionImages(filePath, 'req-many')).toHaveLength(4);
     });
   });
+
+  it('matches a numeric line uuid against the stringified requestId', () => {
+    // parseClaudeLine stringifies numeric uuids, so the request's requestId is
+    // "12345"; the raw extractor JSON.parse leaves entry.uuid as the number 12345.
+    const line = JSON.stringify({
+      type: 'user',
+      uuid: 12345,
+      message: { role: 'user', content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AAAAAAAA' } }] },
+    });
+    withTempFile('claude-numeric-uuid.jsonl', line + '\n', (filePath) => {
+      expect(extractSessionImages(filePath, '12345')).toEqual([
+        'data:image/png;base64,AAAAAAAA',
+      ]);
+    });
+  });
 });
 
 describe('parseWorkspaceName', () => {

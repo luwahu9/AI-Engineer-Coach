@@ -294,7 +294,7 @@ interface ClaudeImageBlock {
 }
 
 interface ClaudeMessageLine {
-  uuid?: string;
+  uuid?: string | number;
   message?: { content?: unknown };
 }
 
@@ -319,7 +319,10 @@ function mimeFromBase64(b64: string): string {
  * caller can try this alongside the VS Code path without disturbing it.
  */
 function extractClaudeImages(entry: ClaudeMessageLine, requestId: string): string[] {
-  if (entry.uuid !== requestId) return [];
+  // The parser stringifies numeric uuids (parseClaudeLine), so requestId is a
+  // string; the raw JSON.parse above can leave entry.uuid as a number. Coerce
+  // before comparing so a numeric uuid still resolves its images.
+  if (entry.uuid === undefined || String(entry.uuid) !== requestId) return [];
   const content = entry.message?.content;
   if (!Array.isArray(content)) return [];
   const images: string[] = [];
