@@ -17,6 +17,7 @@ import { Session, Workspace } from './types';
 import { warnCore } from './log';
 import { parseSessionFile } from './parser-vscode';
 import { parseCLIEventsFile } from './parser-vscode-cli';
+import { parseClaudeSessionFile } from './parser-claude';
 
 export interface ParseResult {
   workspaces: Map<string, Workspace>;
@@ -26,7 +27,7 @@ export interface ParseResult {
 }
 
 export interface SessionSource {
-  kind: 'vscode-session-file' | 'cli-events';
+  kind: 'vscode-session-file' | 'cli-events' | 'claude-session-file';
   filePath: string;
   workspaceId: string;
   workspaceName: string;
@@ -436,6 +437,9 @@ export async function loadSessionFromDisk(sessionId: string): Promise<Session | 
 
     if (source.kind === 'cli-events') {
       return parseCLIEventsFile(source.filePath, source.workspaceId, source.workspaceName);
+    }
+    if (source.kind === 'claude-session-file') {
+      return parseClaudeSessionFile(source.filePath, source.workspaceId, source.workspaceName);
     }
     return parseSessionFile(source.filePath, source.workspaceId, source.workspaceName, source.harness);
   } catch {

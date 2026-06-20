@@ -15,7 +15,7 @@ import { getMemoryCache, setMemoryCache, computeDirMetasAsync, loadCacheData, sa
 import type { DirMetas, ParseResult, SessionSource } from './cache';
 import { findVsCodeDirs, scanVsCodeDirs, processWorkspaceEntry, processWorkspaceEntryAsync, harnessFromPath } from './parser-vscode';
 import { findXcodeDirs, parseXcodeDatabases, parseXcodeDatabasesAsync } from './parser-xcode';
-import { collectExternalHarnessesAsync, collectExternalHarnessesSync, EXTERNAL_HARNESS_SET } from './parser-harnesses';
+import { collectExternalHarnessesAsync, collectExternalHarnessesSync, registerExternalHarnessSources, EXTERNAL_HARNESS_SET } from './parser-harnesses';
 import { warnCore } from './log';
 
 export type { ParseResult };
@@ -263,6 +263,7 @@ async function tryMemoryCache(
 
   mem.result.sessions = mem.result.sessions.filter(s => !EXTERNAL_HARNESS_SET.has(s.harness));
   await collectExternalHarnesses(mem.result.workspaces, mem.result.sessions, onProgress);
+  registerExternalHarnessSources(mem.result.sessions, mem.result.sessionSourceIndex);
   report({
     phase: 1, detail: 'Loaded from memory', pct: pct(1, 1),
     sessions: mem.result.sessions.length,
@@ -288,6 +289,7 @@ async function tryDiskCache(
 
   cached.result.sessions = cached.result.sessions.filter(s => !EXTERNAL_HARNESS_SET.has(s.harness));
   await collectExternalHarnesses(cached.result.workspaces, cached.result.sessions, onProgress);
+  registerExternalHarnessSources(cached.result.sessions, cached.result.sessionSourceIndex);
   setMemoryCache(cached.result, currentMetas);
   report({
     phase: 1, detail: 'Loaded from cache', pct: pct(1, 1),
@@ -486,6 +488,7 @@ export function parseAllLogs(logsDirs: string[]): ParseResult {
   }
 
   collectExternalHarnessesSync(workspaces, sessions);
+  registerExternalHarnessSources(sessions, sessionSourceIndex);
 
   stripSessionsForMemory(sessions);
   return { workspaces, sessions, editLocIndex, sessionSourceIndex };
@@ -586,6 +589,7 @@ export async function parseAllLogsAsyncDetailed(
     const { xcodeDirs } = partitionDirs(logsDirs);
     await collectXcode(xcodeDirs, workspaces, freshSessions, onProgress);
     await collectExternalHarnesses(workspaces, freshSessions, onProgress);
+    registerExternalHarnessSources(freshSessions, freshSessionSourceIndex);
 
     const result: ParseResult = { workspaces, sessions: freshSessions, editLocIndex, sessionSourceIndex: freshSessionSourceIndex };
     stripSessionsForMemory(result.sessions);
@@ -608,6 +612,7 @@ export async function parseAllLogsAsyncDetailed(
 
   await collectXcode(xcodeDirs, workspaces, sessions, onProgress);
   await collectExternalHarnesses(workspaces, sessions, onProgress);
+  registerExternalHarnessSources(sessions, sessionSourceIndex);
 
   const result: ParseResult = { workspaces, sessions, editLocIndex, sessionSourceIndex };
   stripSessionsForMemory(result.sessions);
