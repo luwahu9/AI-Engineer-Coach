@@ -15,6 +15,7 @@ import { findVsCodeDirs, scanVsCodeDirs, processWorkspaceEntry, processWorkspace
 import { computeSessionTotals, createRunningTotals, type SessionTotals } from './session-totals';
 import { findXcodeDirs, parseXcodeDatabases, parseXcodeDatabasesAsync } from './parser-xcode';
 import { collectExternalHarnessesAsync, collectExternalHarnessesSync, EXTERNAL_HARNESS_SET } from './parser-harnesses';
+import { findAntigravityDirs } from './parser-antigravity';
 import { warnCore } from './log';
 import { runtimeDebug } from './runtime-debug';
 
@@ -96,15 +97,20 @@ function pct(phase: number, intraPhase: number): number {
 }
 
 export function findLogsDirs(): string[] {
-  return [...findVsCodeDirs(), ...findXcodeDirs()];
+  return [...findVsCodeDirs(), ...findXcodeDirs(), ...findAntigravityDirs()];
 }
 
 function partitionDirs(logsDirs: string[]): { vsCodeDirs: string[]; xcodeDirs: string[] } {
   const vsCodeDirs: string[] = [];
   const xcodeDirs: string[] = [];
   for (const d of logsDirs) {
-    if (d.includes(path.join('.config', 'github-copilot', 'xcode'))) xcodeDirs.push(d);
-    else vsCodeDirs.push(d);
+    if (d.includes(path.join('.config', 'github-copilot', 'xcode'))) {
+      xcodeDirs.push(d);
+    } else if (d.includes('.gemini') || d.includes('antigravity')) {
+      // Skip Antigravity dirs here because they are parsed as external harnesses
+    } else {
+      vsCodeDirs.push(d);
+    }
   }
   return { vsCodeDirs, xcodeDirs };
 }
