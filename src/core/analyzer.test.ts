@@ -6,6 +6,7 @@
 import { describe, it, expect } from 'vitest';
 import { Analyzer } from './analyzer';
 import { Session, SessionRequest, DateFilter } from './types';
+import { accumulateEditLoc, EditTimelineLike } from './edit-loc-diff';
 
 /**
  * Simulates panel.ts validateDateFilter -- this is the exact logic
@@ -631,3 +632,77 @@ describe('Analyzer', () => {
     });
   });
 });
+
+describe('getCodeProduction with deduplicated edit LoC', () => {
+  it('combines aiCode blocks with incrementally-counted edit LoC instead of summing whole-file snapshots', () => {
+    const URI = 'file:///proj/app.ts';
+    const v1 = Array.from({ length: 10 }, (_, i) => `line${i}`).join('\n');
+    const v2 = v1 + '\nline10';
+    const v3 = v2 + '\nline11';
+    const wholeFile = (text: string) => [{ range: { startLineNumber: 1, startColumn: 1, endLineNumber: 1_000_000, endColumn: 1 }, text }];
+    const timeline: EditTimelineLike = {
+      fileBaselines: [[`${URI}::r1`, { uri: { external: URI }, requestId: 'r1', content: v1 }]],
+      operations: [
+        { type: 'textEdit', requestId: 'r1', uri: { external: URI }, epoch: 1, edits: wholeFile(v1) },
+        { type: 'textEdit', requestId: 'r1', uri: { external: URI }, epoch: 2, edits: wholeFile(v2) },
+        { type: 'textEdit', requestId: 'r1', uri: { external: URI }, epoch: 3, edits: wholeFile(v3) },
+      ],
+    };
+    const editLocIndex = new Map<string, Map<string, { added: number; removed: number }>>();
+    accumulateEditLoc(timeline, editLocIndex);
+    // The three whole-file snapshots (10 + 11 + 12 lines) collapse to 2 newly-produced lines.
+    expect(editLocIndex.get('r1')?.get(URI)?.added).toBe(2);
+
+    const ts = new Date(2024, 5, 15, 10, 0, 0).getTime();
+    const sessions = [
+      makeSession({
+        sessionId: 's1', harness: 'Codex', creationDate: ts, workspaceName: 'proj',
+        requests: [makeRequest({ requestId: 'r1', timestamp: ts, aiCode: [{ language: 'typescript', loc: 5 }] })],
+      }),
+    ];
+    const a = new Analyzer(sessions, editLocIndex);
+    const prod = a.getCodeProduction();
+    // 5 code-block LoC + 2 deduplicated edit LoC = 7 (not 5 + 33 from naive snapshot summing).
+    expect(prod.summary.totalAiLoc).toBe(7);
+  });
+
+  it('reports net = gross added minus removed and surfaces removed in the daily timeline', () => {
+    const URI = 'file:///proj/app.ts';
+    const wholeFile = (text: string) => [{ range: { startLineNumber: 1, startColumn: 1, endLineNumber: 1_000_000, endColumn: 1 }, text }];
+    const v1 = 'a\nb\nc\nd\ne';
+    const v2 = 'a\nb'; // removes c, d, e (3 removed, 0 added)
+    const timeline: EditTimelineLike = {
+      fileBaselines: [[`${URI}::r1`, { uri: { external: URI }, requestId: 'r1', content: v1 }]],
+      operations: [
+        { type: 'textEdit', requestId: 'r1', uri: { external: URI }, epoch: 1, edits: wholeFile(v1) }, // equals baseline -> 0/0
+        { type: 'textEdit', requestId: 'r1', uri: { external: URI }, epoch: 2, edits: wholeFile(v2) }, // 0 added, 3 removed
+      ],
+    };
+    const editLocIndex = new Map<string, Map<string, { added: number; removed: number }>>();
+    accumulateEditLoc(timeline, editLocIndex);
+
+    const ts = new Date(2024, 5, 15, 10, 0, 0).getTime();
+    const day = '2024-06-15';
+    const sessions = [
+      makeSession({
+        sessionId: 's1', harness: 'Codex', creationDate: ts, workspaceName: 'proj',
+        requests: [makeRequest({ requestId: 'r1', timestamp: ts, modelId: 'gpt-5', aiCode: [{ language: 'typescript', loc: 5 }] })],
+      }),
+    ];
+    const prod = new Analyzer(sessions, editLocIndex).getCodeProduction();
+    // Gross = 5 code-block LoC + 0 edit-added; removed = 3; net = 5 - 3 = 2.
+    expect(prod.summary.totalAiLoc).toBe(5);
+    expect(prod.summary.totalRemovedAiLoc).toBe(3);
+    expect(prod.summary.totalNetAiLoc).toBe(2);
+
+    const dayIdx = prod.dailyTimeline.labels.indexOf(day);
+    expect(dayIdx).toBeGreaterThanOrEqual(0);
+    expect(prod.dailyTimeline.aiLoc[dayIdx]).toBe(5);
+    expect(prod.dailyTimeline.removedLoc[dayIdx]).toBe(3);
+    // Removed is broken down by dimension and aligns with the same day index.
+    expect(prod.dailyRemovedByModel['gpt-5'][dayIdx]).toBe(3);
+    expect(prod.dailyRemovedByWorkspace['proj'][dayIdx]).toBe(3);
+    expect(prod.dailyRemovedByHarness['Codex'][dayIdx]).toBe(3);
+  });
+});
+

@@ -9,6 +9,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { Session } from './types';
 import { createSession, detectDevcontainerFromRequests, ParseContext, prefetchCache, stripSingleSession, maybeForceGc, addParseTiming } from './parser-shared';
+import { accumulateEditLoc, EditTimelineLike, InitialContentResolver } from './edit-loc-diff';
 import { debugCore, warnCore } from './log';
 import { canonicalizeReasoningEffort } from './helpers';
 import { parseRawRequest, normalizeSessionMode, type RawRequest } from './parser-vscode-request';
@@ -153,30 +154,48 @@ function listEditStateFiles(esDir: string): string[] {
   }
 }
 
-function countLinesAdded(edits: { text?: string }[] | undefined): number {
-  let linesAdded = 0;
-  for (const edit of (edits || [])) {
-    const text = edit.text || '';
-    if (text) linesAdded += (text.match(/\n/g) || []).length;
+type EditState = {
+  initialFileContents?: [string, string][];
+  timeline?: EditTimelineLike;
+};
+
+/**
+ * Builds a lazy resolver for a file's session-initial content, reading the content-addressed
+ * `contents/<hash>` blob referenced by `initialFileContents` only when first requested.
+ */
+function makeInitialContentResolver(state: EditState, stateDir: string): InitialContentResolver {
+  const hashByUri = new Map<string, string>();
+  for (const entry of state.initialFileContents ?? []) {
+    const uri = entry?.[0];
+    const hash = entry?.[1];
+    if (typeof uri === 'string' && typeof hash === 'string') hashByUri.set(uri, hash);
   }
-  return linesAdded;
+  const cache = new Map<string, string | undefined>();
+  return (uri: string): string | undefined => {
+    if (cache.has(uri)) return cache.get(uri);
+    const hash = hashByUri.get(uri);
+    let content: string | undefined;
+    if (hash) {
+      try {
+        content = readFile(path.join(stateDir, 'contents', hash));
+      } catch {
+        content = undefined;
+      }
+    }
+    cache.set(uri, content);
+    return content;
+  };
 }
 
-function processEditOperation(op: EditStateOperation, editLocIndex: ParseContext['editLocIndex']): void {
-  if (op.type !== 'textEdit') return;
-  const reqId = op.requestId || '';
-  const uri = op.uri?.external || '';
-  if (!reqId || !uri) return;
-  if (!editLocIndex.has(reqId)) editLocIndex.set(reqId, new Map());
-  const fileMap = editLocIndex.get(reqId)!;
-  const linesAdded = countLinesAdded(op.edits);
-  fileMap.set(uri, (fileMap.get(uri) || 0) + linesAdded);
-}
-
-function processEditOperations(operations: EditStateOperation[] | undefined, editLocIndex: ParseContext['editLocIndex']): void {
-  for (const op of (operations || [])) {
-    processEditOperation(op, editLocIndex);
+/** Parses an edit-state JSON payload and accumulates AI-produced LoC into `editLocIndex`. */
+export function parseEditState(raw: string, editLocIndex: ParseContext['editLocIndex'], stateDir: string): void {
+  if (!raw.includes('"textEdit"')) return;
+  let state: EditState;
+  try { state = JSON.parse(raw) as EditState; } catch (e) {
+    warnCore('parser-vscode', `Corrupt state payload in ${stateDir}`, e);
+    return;
   }
+  accumulateEditLoc(state.timeline, editLocIndex, makeInitialContentResolver(state, stateDir));
 }
 
 function parseEditStateFile(stateFile: string, editLocIndex: ParseContext['editLocIndex']): void {
@@ -188,13 +207,7 @@ function parseEditStateFile(stateFile: string, editLocIndex: ParseContext['editL
     }
     return;
   }
-  if (!raw.includes('"textEdit"')) return;
-  let state: { timeline?: { operations?: EditStateOperation[] } };
-  try { state = JSON.parse(raw) as typeof state; } catch (e) {
-    warnCore('parser-vscode', `Corrupt state file ${stateFile}`, e);
-    return;
-  }
-  processEditOperations(state.timeline?.operations, editLocIndex);
+  parseEditState(raw, editLocIndex, path.dirname(stateFile));
 }
 
 function chunkInterval(total: number): number {
@@ -446,13 +459,6 @@ interface SessionFileData {
     };
   };
 }
-
-type EditStateOperation = {
-  type: string;
-  requestId?: string;
-  uri?: { external?: string };
-  edits?: { text?: string }[];
-};
 
 export function parseSessionFile(sessionFile: string, wsId: string, wsName: string, harness: string, customInstructionsBytes?: number): Session | null {
 

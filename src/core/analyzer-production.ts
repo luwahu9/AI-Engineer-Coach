@@ -15,13 +15,19 @@ export class ProductionAnalyzer extends AnalyzerBase {
   getCodeProduction(f?: DateFilter): CodeProductionData {
     const reqs = this.filter(f);
     let totalAiLoc = 0;
+    let totalRemovedAiLoc = 0;
     let aiBlocks = 0;
     const langAi = new Map<string, number>();
     const dailyAi = new Map<string, number>();
+    const dailyRemovedAi = new Map<string, number>();
     const wsAi = new Map<string, number>();
+    const wsRemoved = new Map<string, number>();
     const dailyWsAi = new Map<string, Map<string, number>>();
+    const dailyWsRemoved = new Map<string, Map<string, number>>();
     const dailyModelAi = new Map<string, Map<string, number>>();
+    const dailyModelRemoved = new Map<string, Map<string, number>>();
     const dailyHarnessAi = new Map<string, Map<string, number>>();
+    const dailyHarnessRemoved = new Map<string, Map<string, number>>();
 
     for (const request of reqs) {
       const day = toDateStr(request.timestamp!);
@@ -49,13 +55,20 @@ export class ProductionAnalyzer extends AnalyzerBase {
       const model = normalizeModel(request.modelId || 'unknown');
       const harness = session?.harness || 'unknown';
       for (const [file, loc] of editLocs) {
-        totalAiLoc += loc;
-        this.addProductionLoc(langAi, file.split('.').pop()?.toLowerCase() || 'unknown', loc);
-        if (day) this.addProductionLoc(dailyAi, day, loc);
-        this.addWorkspaceProductionLoc(wsAi, dailyWsAi, workspaceName, day, loc);
+        totalAiLoc += loc.added;
+        totalRemovedAiLoc += loc.removed;
+        this.addProductionLoc(langAi, file.split('.').pop()?.toLowerCase() || 'unknown', loc.added);
         if (day) {
-          this.addDailyGroupLoc(dailyModelAi, model, day, loc);
-          this.addDailyGroupLoc(dailyHarnessAi, harness, day, loc);
+          this.addProductionLoc(dailyAi, day, loc.added);
+          this.addProductionLoc(dailyRemovedAi, day, loc.removed);
+        }
+        this.addWorkspaceProductionLoc(wsAi, dailyWsAi, workspaceName, day, loc.added);
+        this.addWorkspaceProductionLoc(wsRemoved, dailyWsRemoved, workspaceName, day, loc.removed);
+        if (day) {
+          this.addDailyGroupLoc(dailyModelAi, model, day, loc.added);
+          this.addDailyGroupLoc(dailyHarnessAi, harness, day, loc.added);
+          this.addDailyGroupLoc(dailyModelRemoved, model, day, loc.removed);
+          this.addDailyGroupLoc(dailyHarnessRemoved, harness, day, loc.removed);
         }
       }
     }
@@ -80,6 +93,7 @@ export class ProductionAnalyzer extends AnalyzerBase {
     return {
       summary: {
         totalAiLoc, totalUserLoc: 0, totalLoc: totalAiLoc,
+        totalRemovedAiLoc, totalNetAiLoc: totalAiLoc - totalRemovedAiLoc,
         aiBlocks, userBlocks: 0, aiRatio: 1,
         locCost2010,
         costPerLoc: totalAiLoc > 0 ? locCost2010 / totalAiLoc : 0,
@@ -92,6 +106,7 @@ export class ProductionAnalyzer extends AnalyzerBase {
       dailyTimeline: {
         labels: dayArr,
         aiLoc: dayArr.map(d => dailyAi.get(d) || 0),
+        removedLoc: dayArr.map(d => dailyRemovedAi.get(d) || 0),
         userLoc: dayArr.map(() => 0),
       },
       byWorkspace: {
@@ -99,22 +114,24 @@ export class ProductionAnalyzer extends AnalyzerBase {
         aiLoc: wsArr.map(w => wsAi.get(w) || 0),
         userLoc: wsArr.map(() => 0),
       },
-      dailyByWorkspace: Object.fromEntries(
-        Array.from(dailyWsAi.entries()).map(([ws, dm]) => [
-          ws, dayArr.map(d => dm.get(d) || 0),
-        ])
-      ),
-      dailyByModel: Object.fromEntries(
-        Array.from(dailyModelAi.entries()).map(([m, dm]) => [
-          m, dayArr.map(d => dm.get(d) || 0),
-        ])
-      ),
-      dailyByHarness: Object.fromEntries(
-        Array.from(dailyHarnessAi.entries()).map(([h, dm]) => [
-          h, dayArr.map(d => dm.get(d) || 0),
-        ])
-      ),
+      dailyByWorkspace: this.toDailyRecord(dailyWsAi, dayArr),
+      dailyRemovedByWorkspace: this.toDailyRecord(dailyWsRemoved, dayArr),
+      dailyByModel: this.toDailyRecord(dailyModelAi, dayArr),
+      dailyRemovedByModel: this.toDailyRecord(dailyModelRemoved, dayArr),
+      dailyByHarness: this.toDailyRecord(dailyHarnessAi, dayArr),
+      dailyRemovedByHarness: this.toDailyRecord(dailyHarnessRemoved, dayArr),
     };
+  }
+
+  private toDailyRecord(
+    groupMap: Map<string, Map<string, number>>,
+    dayArr: string[],
+  ): Record<string, number[]> {
+    return Object.fromEntries(
+      Array.from(groupMap.entries()).map(([key, dm]) => [
+        key, dayArr.map(d => dm.get(d) || 0),
+      ])
+    );
   }
 
   private addProductionLoc(target: Map<string, number>, key: string, loc: number): void {

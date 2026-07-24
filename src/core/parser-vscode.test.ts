@@ -9,7 +9,7 @@ import * as path from 'path';
 import { describe, it, expect } from 'vitest';
 import { reconstructFromJsonl } from './parser-vscode-files';
 import { parseCLIEventsFile } from './parser-vscode-cli';
-import { parseSessionFile, harnessFromPath, findVsCodeDirs, scanVsCodeDirs } from './parser-vscode';
+import { parseSessionFile, harnessFromPath, findVsCodeDirs, scanVsCodeDirs, parseEditState } from './parser-vscode';
 
 function withTempFile(name: string, content: string, run: (filePath: string) => void): void {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-engineer-coach-'));
@@ -886,3 +886,71 @@ describe('findVsCodeDirs — VS Code Server', () => {
     }
   });
 });
+
+describe('parseEditState (AI-generated LoC)', () => {
+  const URI = 'file:///project/src/app.ts';
+
+  function wholeFileEdit(text: string): unknown {
+    return { range: { startLineNumber: 1, startColumn: 1, endLineNumber: 1_000_000, endColumn: 1 }, text };
+  }
+
+  function textEditOp(reqId: string, epoch: number, text: string): unknown {
+    return { type: 'textEdit', requestId: reqId, uri: { external: URI }, epoch, edits: [wholeFileEdit(text)] };
+  }
+
+  function totalFor(index: Map<string, Map<string, { added: number; removed: number }>>, uri: string): number {
+    let sum = 0;
+    for (const fileMap of index.values()) sum += fileMap.get(uri)?.added ?? 0;
+    return sum;
+  }
+
+  it('counts repeated whole-file snapshots incrementally, not by summing payloads', () => {
+    const v1 = Array.from({ length: 10 }, (_, i) => `line${i}`).join('\n');
+    const v2 = v1 + '\nline10';
+    const v3 = v2 + '\nline11';
+    const raw = JSON.stringify({
+      timeline: {
+        fileBaselines: [[`${URI}::r1`, { uri: { external: URI }, requestId: 'r1', content: v1 }]],
+        operations: [textEditOp('r1', 1, v1), textEditOp('r1', 2, v2), textEditOp('r1', 3, v3)],
+      },
+    });
+    const index = new Map<string, Map<string, { added: number; removed: number }>>();
+    parseEditState(raw, index, os.tmpdir());
+    expect(totalFor(index, URI)).toBe(2);
+  });
+
+  it('skips payloads that contain no textEdit operations', () => {
+    const raw = JSON.stringify({ timeline: { operations: [{ type: 'create', requestId: 'r1', uri: { external: URI } }] } });
+    const index = new Map<string, Map<string, { added: number; removed: number }>>();
+    parseEditState(raw, index, os.tmpdir());
+    expect(index.size).toBe(0);
+  });
+
+  it('does not throw on corrupt JSON that contains the textEdit guard token', () => {
+    const index = new Map<string, Map<string, { added: number; removed: number }>>();
+    expect(() => parseEditState('{"textEdit": not-valid-json', index, os.tmpdir())).not.toThrow();
+    expect(index.size).toBe(0);
+  });
+
+  it('seeds the diff from contents/<hash> when the per-request baseline is missing', () => {
+    const existing = 'a\nb\nc\nd\ne';
+    const edited = 'a\nb\nCHANGED\nd\ne';
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-engineer-coach-edits-'));
+    try {
+      const hash = 'deadbeef';
+      fs.mkdirSync(path.join(dir, 'contents'), { recursive: true });
+      fs.writeFileSync(path.join(dir, 'contents', hash), existing, 'utf-8');
+      const raw = JSON.stringify({
+        initialFileContents: [[URI, hash]],
+        timeline: { operations: [textEditOp('r1', 1, edited)] },
+      });
+      const index = new Map<string, Map<string, { added: number; removed: number }>>();
+      parseEditState(raw, index, dir);
+      // Only the one changed line is counted — the pre-existing body is not re-counted.
+      expect(totalFor(index, URI)).toBe(1);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+

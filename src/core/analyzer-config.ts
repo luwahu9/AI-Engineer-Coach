@@ -8,6 +8,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import { EditLocIndex } from './edit-loc-diff';
 import {
   Session, DateFilter, Workspace, AntiPattern, OccurrenceDetail,
   ConfigHealthData, WorkspaceConfigHealth,
@@ -32,7 +33,7 @@ import {
 export class ConfigAnalyzer extends AnalyzerBase {
   private workspaces: Map<string, Workspace>;
 
-  constructor(sessions: Session[], editLocIndex: Map<string, Map<string, number>>, workspaces: Map<string, Workspace>, sharedMap?: Map<import('./types').SessionRequest, Session>) {
+  constructor(sessions: Session[], editLocIndex: EditLocIndex, workspaces: Map<string, Workspace>, sharedMap?: Map<import('./types').SessionRequest, Session>) {
     super(sessions, editLocIndex, sharedMap);
     this.workspaces = workspaces;
   }

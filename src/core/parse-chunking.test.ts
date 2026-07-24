@@ -8,6 +8,7 @@ import { ChunkAssembler, DEFAULT_SESSION_CHUNK_SIZE, emitResultChunks, type Work
 import { createRequest, createSession } from './parser-shared';
 import type { ParseResult, SessionSource } from './cache';
 import type { Session, Workspace } from './types';
+import type { EditLoc } from './edit-loc-diff';
 
 /**
  * Build a deterministic synthetic ParseResult with the cross-references the chunking logic
@@ -17,7 +18,7 @@ import type { Session, Workspace } from './types';
  */
 function makeSyntheticResult(sessionCount: number, requestsPerSession: number): ParseResult {
   const sessions: Session[] = [];
-  const editLocIndex = new Map<string, Map<string, number>>();
+  const editLocIndex = new Map<string, Map<string, EditLoc>>();
   const sessionSourceIndex = new Map<string, SessionSource>();
   const workspaces = new Map<string, Workspace>();
 
@@ -25,7 +26,7 @@ function makeSyntheticResult(sessionCount: number, requestsPerSession: number): 
     const wsId = `ws${i % 7}`;
     const requests = Array.from({ length: requestsPerSession }, (_, j) => {
       const requestId = `s${i}-r${j}`;
-      editLocIndex.set(requestId, new Map([[`/file${j}.ts`, j + 1]]));
+      editLocIndex.set(requestId, new Map([[`/file${j}.ts`, { added: j + 1, removed: 0 }]]));
       return createRequest({ requestId, messageText: `msg ${i}/${j}`, responseText: `resp ${i}/${j}` });
     });
     const session = createSession({
@@ -47,7 +48,7 @@ function makeSyntheticResult(sessionCount: number, requestsPerSession: number): 
   }
 
   // Orphans that must survive via the done payload.
-  editLocIndex.set('orphan-edit', new Map([['/orphan.ts', 99]]));
+  editLocIndex.set('orphan-edit', new Map([['/orphan.ts', { added: 99, removed: 0 }]]));
   sessionSourceIndex.set('orphan-source', {
     kind: 'cli-events',
     filePath: '/logs/orphan/events.json',
@@ -91,7 +92,7 @@ describe('parse-chunking parity', () => {
     const result = makeSyntheticResult(10, 2);
     const assembled = await roundTrip(result, 4);
 
-    expect(assembled.editLocIndex.get('orphan-edit')).toEqual(new Map([['/orphan.ts', 99]]));
+    expect(assembled.editLocIndex.get('orphan-edit')).toEqual(new Map([['/orphan.ts', { added: 99, removed: 0 }]]));
     expect(assembled.sessionSourceIndex.get('orphan-source')?.workspaceId).toBe('orphan');
   });
 

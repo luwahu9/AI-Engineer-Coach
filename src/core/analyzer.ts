@@ -27,6 +27,7 @@ import { ContextAnalyzer } from './analyzer-context';
 import { InsightsAnalyzer } from './analyzer-insights';
 import { ImageAnalyzer, ImageGalleryData } from './analyzer-images';
 import { AnalyzerBase } from './analyzer-base';
+import { EditLoc, EditLocIndex } from './edit-loc-diff';
 import { errorCore, infoCore, warnCore } from './log';
 
 export class Analyzer {
@@ -42,12 +43,12 @@ export class Analyzer {
   private readonly context: ContextAnalyzer;
   private readonly images: ImageAnalyzer;
   private readonly sessions: Session[];
-  private readonly editLocIndex: Map<string, Map<string, number>>;
+  private readonly editLocIndex: EditLocIndex;
   private readonly workspaces: Map<string, Workspace>;
   private cache = new Map<string, unknown>();
 
-  constructor(sessions: Session[], editLocIndex?: Map<string, Map<string, number>>, workspaces?: Map<string, Workspace>) {
-    const elIdx = editLocIndex ?? new Map<string, Map<string, number>>();
+  constructor(sessions: Session[], editLocIndex?: EditLocIndex, workspaces?: Map<string, Workspace>) {
+    const elIdx = editLocIndex ?? new Map<string, Map<string, EditLoc>>();
     this.sessions = sessions;
     this.editLocIndex = elIdx;
     this.workspaces = workspaces ?? new Map<string, Workspace>();

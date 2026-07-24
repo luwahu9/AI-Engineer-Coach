@@ -472,7 +472,7 @@ export class PatternsAnalyzer extends AnalyzerBase {
       estimatedLoc += request.aiCode.reduce((sum, block) => sum + block.loc, 0);
       const editLocs = this.editLocIndex.get(request.requestId);
       if (editLocs) {
-        for (const loc of editLocs.values()) estimatedLoc += loc;
+        for (const loc of editLocs.values()) estimatedLoc += loc.added;
       }
     }
     return estimatedLoc;

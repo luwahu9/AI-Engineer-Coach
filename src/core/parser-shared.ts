@@ -10,6 +10,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { CodeBlock, Session, SessionRequest, Workspace } from './types';
 import { SessionSource } from './cache';
+import { EditLocIndex } from './edit-loc-diff';
 import { classifyWorkType } from './helpers';
 import { warnCore } from './log';
 import { SessionSchema } from './schemas';
@@ -326,7 +327,7 @@ function textForCodeScan(text: string): string {
 export interface ParseContext {
   workspaces: Map<string, Workspace>;
   sessions: Session[];
-  editLocIndex: Map<string, Map<string, number>>;
+  editLocIndex: EditLocIndex;
   sessionSourceIndex: Map<string, SessionSource>;
   /** Running total of AI-generated lines of code (sum of all aiCode blocks). */
   aiLoc: number;

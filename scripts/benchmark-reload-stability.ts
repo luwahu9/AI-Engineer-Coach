@@ -40,7 +40,7 @@ type WorkerPayload = {
   result: {
     workspaces: Array<[string, { id: string; name: string; path: string }]>;
     sessions: import('../src/core/types').Session[];
-    editLocIndex: Array<[string, Array<[string, number]>]>;
+    editLocIndex: Array<[string, Array<[string, { added: number; removed: number }]>]>;
   };
 };
 

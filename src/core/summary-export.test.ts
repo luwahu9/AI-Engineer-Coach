@@ -25,6 +25,8 @@ const codeProduction: CodeProductionData = {
     totalAiLoc: 1200,
     totalUserLoc: 300,
     totalLoc: 1500,
+    totalRemovedAiLoc: 200,
+    totalNetAiLoc: 1000,
     aiBlocks: 12,
     userBlocks: 4,
     aiRatio: 0.8,
@@ -36,11 +38,14 @@ const codeProduction: CodeProductionData = {
     aiLoc: [900, 250, 50],
     userLoc: [100, 150, 50],
   },
-  dailyTimeline: { labels: [], aiLoc: [], userLoc: [] },
+  dailyTimeline: { labels: [], aiLoc: [], removedLoc: [], userLoc: [] },
   byWorkspace: { labels: [], aiLoc: [], userLoc: [] },
   dailyByWorkspace: {},
+  dailyRemovedByWorkspace: {},
   dailyByModel: {},
+  dailyRemovedByModel: {},
   dailyByHarness: {},
+  dailyRemovedByHarness: {},
 };
 
 const dailyActivity: DailyActivity = {

@@ -58,13 +58,16 @@ function aggregateByWorkspace(
 }
 
 interface ProdData {
-  summary: { totalAiLoc: number; locCost2010: number };
-  dailyTimeline: { labels: string[]; aiLoc: number[] };
+  summary: { totalAiLoc: number; totalRemovedAiLoc: number; totalNetAiLoc: number; locCost2010: number };
+  dailyTimeline: { labels: string[]; aiLoc: number[]; removedLoc: number[] };
   byLanguage: { labels: string[]; aiLoc: number[] };
   byWorkspace: { labels: string[]; aiLoc: number[] };
   dailyByWorkspace: Record<string, number[]>;
+  dailyRemovedByWorkspace: Record<string, number[]>;
   dailyByModel: Record<string, number[]>;
+  dailyRemovedByModel: Record<string, number[]>;
   dailyByHarness: Record<string, number[]>;
+  dailyRemovedByHarness: Record<string, number[]>;
 }
 
 interface AiCreditRpcData {
@@ -252,21 +255,46 @@ export async function renderOutput(container: HTMLElement, currentFilter: DateFi
     const prod = await rpc<ProdData>('getCodeProduction', buildRangeFilter());
     const s = prod.summary;
     const level = aggregationLevel(activeRangeDays);
-    const chartTitle = level === 'weekly' ? 'Weekly Production' : level === 'monthly' ? 'Monthly Production' : 'Daily Production';
+    const chartTitle = level === 'weekly' ? 'Weekly AI Code Output' : level === 'monthly' ? 'Monthly AI Code Output' : 'Daily AI Code Output';
     const yLabel = level === 'weekly' ? 'LoC/week' : level === 'monthly' ? 'LoC/month' : 'LoC/day';
+    const cadence = level === 'weekly' ? 'week' : level === 'monthly' ? 'month' : 'day';
+    const outputInfo = html`<span class="info-icon" tabindex="0" role="button" aria-label="AI code output info">${'\u24d8'}<span class="info-popup">Counts the net new lines of code the AI assistant actually wrote, aggregated per ${cadence}. Each edit is compared against the previous version of the file, so only added lines are counted ${'\u2014'} re-saving an unchanged file or rewriting the same lines is not double-counted. Taller bars mean more AI-authored code in that period; hover a bar to see the exact line count, and use the tabs below to split output by model, workspace, or harness.</span></span>`;
+    const netInfo = html`<span class="info-icon" tabindex="0" role="button" aria-label="Net AI code output info">${'\u24d8'}<span class="info-popup">Net AI LoC is lines the AI added minus lines the AI removed, aggregated per ${cadence}. A ${cadence} where the assistant deleted or rewrote more than it added shows a bar below zero. This reflects the lasting footprint of AI edits on your files, not just gross output.</span></span>`;
+    const netTitle = level === 'weekly' ? 'Weekly Net AI Code Output' : level === 'monthly' ? 'Monthly Net AI Code Output' : 'Daily Net AI Code Output';
 
     render(html`
       <div class="stat-grid">
         <${StatCard} label="AI-Generated LoC" value=${formatNum(s.totalAiLoc)} accent="var(--accent-blue)" />
+        <${StatCard} label="Net AI LoC" value=${formatNum(s.totalNetAiLoc)} accent="var(--accent-green)" />
       </div>
       <div class="chart-tabs" style="margin-top:18px">
         <button class="chart-tab active" data-prod-tab="model">Code Output</button>
         <button class="chart-tab" data-prod-tab="workspace">Output by Workspace</button>
         <button class="chart-tab" data-prod-tab="harness">Output by Harness</button>
       </div>
-      <div id="prodTabModel" class="chart-tab-panel active"><${CanvasEl} id="prodModelChart" height=${300} title=${chartTitle} /></div>
+      <div id="prodTabModel" class="chart-tab-panel active">
+        <div class="chart-wrap">
+          <div class="chart-title">${chartTitle} ${outputInfo}</div>
+          <canvas id="prodModelChart" height=${300}></canvas>
+        </div>
+      </div>
       <div id="prodTabWorkspace" class="chart-tab-panel"><${CanvasEl} id="prodDailyChart" height=${300} title=${chartTitle} /></div>
       <div id="prodTabHarness" class="chart-tab-panel"><${CanvasEl} id="prodHarnessChart" height=${300} title=${chartTitle} /></div>
+      <div class="chart-tabs" style="margin-top:24px">
+        <button class="chart-tab active" data-net-tab="total">Net Code Output</button>
+        <button class="chart-tab" data-net-tab="model">Net by Model</button>
+        <button class="chart-tab" data-net-tab="workspace">Net by Workspace</button>
+        <button class="chart-tab" data-net-tab="harness">Net by Harness</button>
+      </div>
+      <div id="netTabTotal" class="chart-tab-panel active">
+        <div class="chart-wrap">
+          <div class="chart-title">${netTitle} ${netInfo}</div>
+          <canvas id="netTotalChart" height=${300}></canvas>
+        </div>
+      </div>
+      <div id="netTabModel" class="chart-tab-panel"><${CanvasEl} id="netModelChart" height=${300} title=${netTitle} /></div>
+      <div id="netTabWorkspace" class="chart-tab-panel"><${CanvasEl} id="netWorkspaceChart" height=${300} title=${netTitle} /></div>
+      <div id="netTabHarness" class="chart-tab-panel"><${CanvasEl} id="netHarnessChart" height=${300} title=${netTitle} /></div>
       <div class="two-col">
         <${CanvasEl} id="prodLangChart" height=${300} title="By Language" />
         <${CanvasEl} id="prodWsChart" height=${300} title="By Workspace" />
@@ -394,6 +422,69 @@ export async function renderOutput(container: HTMLElement, currentFilter: DateFi
       scales: { x: { beginAtZero: true } },
     });
 
+    // --- Net total chart (diverging added / removed) ---
+    const { labels: netLabels, values: addedTotals } = aggregateTimeline(
+      prod.dailyTimeline.labels, prod.dailyTimeline.aiLoc, level,
+    );
+    const { values: removedTotals } = aggregateTimeline(
+      prod.dailyTimeline.labels, prod.dailyTimeline.removedLoc, level,
+    );
+    const removedNeg = removedTotals.map(v => -v);
+    const netTotals = addedTotals.map((v, i) => v - removedTotals[i]);
+    createChart('netTotalChart', 'bar', {
+      labels: netLabels,
+      datasets: [
+        { label: 'Added', data: addedTotals, backgroundColor: COLORS.green + '99', borderColor: COLORS.green, borderWidth: 1, stack: 'net' },
+        { label: 'Removed', data: removedNeg, backgroundColor: COLORS.red + '99', borderColor: COLORS.red, borderWidth: 1, stack: 'net' },
+        { type: 'line', label: 'Net', data: netTotals, borderColor: COLORS.blue, backgroundColor: COLORS.blue, borderWidth: 2, pointRadius: 2, fill: false, stack: undefined },
+      ],
+    }, {
+      plugins: { legend: { position: 'top' } },
+      scales: { x: { stacked: true, ticks: { maxTicksLimit: 15 } }, y: { stacked: true, beginAtZero: false, title: { display: true, text: yLabel } } },
+    });
+
+    // --- Net stacked charts by dimension ---
+    const buildNetDatasets = (
+      grossMap: Record<string, number[]>,
+      removedMap: Record<string, number[]>,
+      colorFor: (name: string, i: number) => string,
+      limit: number,
+    ): { labels: string[]; datasets: Record<string, unknown>[] } => {
+      const { labels, byWs: grossBuckets } = aggregateByWorkspace(prod.dailyTimeline.labels, grossMap, level);
+      const { byWs: removedBuckets } = aggregateByWorkspace(prod.dailyTimeline.labels, removedMap, level);
+      const names = Object.keys(grossBuckets).sort((a, b) => {
+        const sumA = grossBuckets[a].reduce((s, v) => s + v, 0) - (removedBuckets[a]?.reduce((s, v) => s + v, 0) ?? 0);
+        const sumB = grossBuckets[b].reduce((s, v) => s + v, 0) - (removedBuckets[b]?.reduce((s, v) => s + v, 0) ?? 0);
+        return sumB - sumA;
+      });
+      const top = names.slice(0, limit);
+      const other = names.slice(limit);
+      const netOf = (name: string) => grossBuckets[name].map((v, i) => v - (removedBuckets[name]?.[i] ?? 0));
+      const datasets: Record<string, unknown>[] = top.map((name, i) => ({
+        label: name, data: netOf(name),
+        backgroundColor: colorFor(name, i) + '99', borderColor: colorFor(name, i), borderWidth: 1, stack: 'net',
+      }));
+      if (other.length > 0) {
+        const otherData = labels.map((_, i) => other.reduce((s, name) => s + (grossBuckets[name][i] - (removedBuckets[name]?.[i] ?? 0)), 0));
+        datasets.push({ label: `Other (${other.length})`, data: otherData, backgroundColor: COLORS.muted + '60', borderColor: COLORS.muted, borderWidth: 1, stack: 'net' });
+      }
+      return { labels, datasets };
+    };
+
+    const netChartOpts = {
+      plugins: { legend: { position: 'top' } },
+      scales: { x: { stacked: true, ticks: { maxTicksLimit: 15 } }, y: { stacked: true, beginAtZero: false, title: { display: true, text: yLabel } } },
+    };
+
+    const netModel = buildNetDatasets(prod.dailyByModel, prod.dailyRemovedByModel, (_, i) => PALETTE[i % PALETTE.length], 8);
+    createChart('netModelChart', 'bar', { labels: netModel.labels, datasets: netModel.datasets }, netChartOpts);
+
+    const netWs = buildNetDatasets(prod.dailyByWorkspace, prod.dailyRemovedByWorkspace, (_, i) => wsColor(i), 15);
+    createChart('netWorkspaceChart', 'bar', { labels: netWs.labels, datasets: netWs.datasets }, netChartOpts);
+
+    const netHarness = buildNetDatasets(prod.dailyByHarness, prod.dailyRemovedByHarness, (name) => harnessColor(name), 12);
+    createChart('netHarnessChart', 'bar', { labels: netHarness.labels, datasets: netHarness.datasets }, netChartOpts);
+
     // Wire production chart tab switching
     for (const btn of target.querySelectorAll<HTMLButtonElement>('.chart-tab[data-prod-tab]')) {
       btn.addEventListener('click', () => {
@@ -401,8 +492,20 @@ export async function renderOutput(container: HTMLElement, currentFilter: DateFi
         btn.classList.add('active');
         const tab = btn.dataset.prodTab;
         const panelMap: Record<string, string> = { model: 'prodTabModel', workspace: 'prodTabWorkspace', harness: 'prodTabHarness' };
-        for (const p of target.querySelectorAll<HTMLElement>('.chart-tab-panel')) p.classList.remove('active');
+        for (const p of target.querySelectorAll<HTMLElement>('#prodTabModel, #prodTabWorkspace, #prodTabHarness')) p.classList.remove('active');
         document.getElementById(panelMap[tab || 'model'])!.classList.add('active');
+      });
+    }
+
+    // Wire net chart tab switching
+    for (const btn of target.querySelectorAll<HTMLButtonElement>('.chart-tab[data-net-tab]')) {
+      btn.addEventListener('click', () => {
+        for (const b of target.querySelectorAll<HTMLButtonElement>('.chart-tab[data-net-tab]')) b.classList.remove('active');
+        btn.classList.add('active');
+        const tab = btn.dataset.netTab;
+        const panelMap: Record<string, string> = { total: 'netTabTotal', model: 'netTabModel', workspace: 'netTabWorkspace', harness: 'netTabHarness' };
+        for (const p of target.querySelectorAll<HTMLElement>('#netTabTotal, #netTabModel, #netTabWorkspace, #netTabHarness')) p.classList.remove('active');
+        document.getElementById(panelMap[tab || 'total'])!.classList.add('active');
       });
     }
   }

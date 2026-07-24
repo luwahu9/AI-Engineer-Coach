@@ -16,19 +16,20 @@
 
 import type { Session, Workspace } from './types';
 import type { ParseResult, SessionSource } from './cache';
+import type { EditLoc } from './edit-loc-diff';
 
 /** Default number of sessions per streamed IPC chunk. */
 export const DEFAULT_SESSION_CHUNK_SIZE = 250;
 
 export interface WorkerChunkPayload {
   sessions: Session[];
-  editLocEntries: Array<[string, Array<[string, number]>]>;
+  editLocEntries: Array<[string, Array<[string, EditLoc]>]>;
   sourceEntries: Array<[string, SessionSource]>;
 }
 
 export interface WorkerDonePayload {
   workspaces: Array<[string, Workspace]>;
-  orphanEditLoc: Array<[string, Array<[string, number]>]>;
+  orphanEditLoc: Array<[string, Array<[string, EditLoc]>]>;
   orphanSources: Array<[string, SessionSource]>;
 }
 
@@ -93,7 +94,7 @@ export async function emitResultChunks(
  */
 export class ChunkAssembler {
   readonly sessions: Session[] = [];
-  readonly editLocIndex = new Map<string, Map<string, number>>();
+  readonly editLocIndex = new Map<string, Map<string, EditLoc>>();
   readonly sessionSourceIndex = new Map<string, SessionSource>();
   chunkCount = 0;
 

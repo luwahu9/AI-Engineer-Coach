@@ -7,11 +7,12 @@
 
 import { parentPort } from 'worker_threads';
 import { Analyzer } from './analyzer';
+import type { EditLocIndex } from './edit-loc-diff';
 import type { Session, Workspace } from './types';
 
 interface WarmUpWorkerRequest {
   sessions: Session[];
-  editLocIndex?: Map<string, Map<string, number>>;
+  editLocIndex?: EditLocIndex;
   workspaces?: Map<string, Workspace>;
 }
 

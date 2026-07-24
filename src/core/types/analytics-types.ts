@@ -48,6 +48,8 @@ export interface CodeProductionData {
     totalAiLoc: number;
     totalUserLoc: number;
     totalLoc: number;
+    totalRemovedAiLoc: number;
+    totalNetAiLoc: number;
     aiBlocks: number;
     userBlocks: number;
     aiRatio: number;
@@ -62,6 +64,7 @@ export interface CodeProductionData {
   dailyTimeline: {
     labels: string[];
     aiLoc: number[];
+    removedLoc: number[];
     userLoc: number[];
   };
   byWorkspace: {
@@ -70,8 +73,11 @@ export interface CodeProductionData {
     userLoc: number[];
   };
   dailyByWorkspace: Record<string, number[]>;
+  dailyRemovedByWorkspace: Record<string, number[]>;
   dailyByModel: Record<string, number[]>;
+  dailyRemovedByModel: Record<string, number[]>;
   dailyByHarness: Record<string, number[]>;
+  dailyRemovedByHarness: Record<string, number[]>;
 }
 
 export interface ConsumptionData {

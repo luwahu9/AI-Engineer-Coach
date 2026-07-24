@@ -6,14 +6,15 @@
 /* Base class for analyzer modules -- provides shared filtering logic */
 
 import { Session, SessionRequest, DateFilter } from './types';
+import { EditLocIndex } from './edit-loc-diff';
 import { toDateStr } from './helpers';
 
 export class AnalyzerBase {
   protected readonly sessions: Session[];
-  protected readonly editLocIndex: Map<string, Map<string, number>>;
+  protected readonly editLocIndex: EditLocIndex;
   protected readonly requestSessionMap: Map<SessionRequest, Session>;
 
-  constructor(sessions: Session[], editLocIndex: Map<string, Map<string, number>>, sharedMap?: Map<SessionRequest, Session>) {
+  constructor(sessions: Session[], editLocIndex: EditLocIndex, sharedMap?: Map<SessionRequest, Session>) {
     this.sessions = sessions;
     this.editLocIndex = editLocIndex;
     if (sharedMap) {
@@ -57,7 +58,7 @@ export class AnalyzerBase {
   protected requestLoc(r: SessionRequest): number {
     let loc = r.aiCode.reduce((s, b) => s + b.loc, 0);
     const eMap = this.editLocIndex.get(r.requestId);
-    if (eMap) for (const v of eMap.values()) loc += v;
+    if (eMap) for (const v of eMap.values()) loc += v.added;
     return loc;
   }
 
