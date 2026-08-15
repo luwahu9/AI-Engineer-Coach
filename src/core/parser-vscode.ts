@@ -7,8 +7,8 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { Session } from './types';
-import { createSession, detectDevcontainerFromRequests, ParseContext, prefetchCache, stripSingleSession, maybeForceGc, addParseTiming } from './parser-shared';
+import { Session, SessionRequest } from './types';
+import { createRequest, createSession, detectDevcontainerFromRequests, ParseContext, prefetchCache, stripSingleSession, maybeForceGc, addParseTiming } from './parser-shared';
 import { debugCore, warnCore } from './log';
 import { canonicalizeReasoningEffort } from './helpers';
 import { parseRawRequest, normalizeSessionMode, type RawRequest } from './parser-vscode-request';
@@ -153,6 +153,190 @@ function listEditStateFiles(esDir: string): string[] {
   }
 }
 
+function listTranscriptFiles(transcriptDir: string): string[] {
+  try {
+    return fs.readdirSync(transcriptDir, { withFileTypes: true })
+      .filter(e => e.isFile() && e.name.endsWith('.jsonl'))
+      .map(e => path.join(transcriptDir, e.name));
+  } catch {
+    return [];
+  }
+}
+
+interface TranscriptEvent {
+  type: string;
+  id?: string;
+  timestamp?: string;
+  data?: Record<string, unknown>;
+}
+
+function parseTranscriptLines(raw: string): TranscriptEvent[] {
+  const events: TranscriptEvent[] = [];
+  for (const line of raw.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    try {
+      const parsed = JSON.parse(trimmed) as unknown;
+      if (typeof parsed === 'object' && parsed !== null && typeof (parsed as { type?: unknown }).type === 'string') {
+        events.push(parsed as TranscriptEvent);
+      }
+    } catch {
+      // Skip malformed transcript rows; keep the rest of the session.
+    }
+  }
+  return events;
+}
+
+function buildToolNameIndex(events: TranscriptEvent[]): Map<string, string> {
+  const byCallId = new Map<string, string>();
+  for (const ev of events) {
+    if (ev.type !== 'tool.execution_start') continue;
+    const callId = typeof ev.data?.toolCallId === 'string' ? ev.data.toolCallId : '';
+    const toolName = typeof ev.data?.toolName === 'string' ? ev.data.toolName : '';
+    if (!callId || !toolName) continue;
+    byCallId.set(callId, toolName);
+  }
+  return byCallId;
+}
+
+function collectToolsFromToolRequests(
+  toolRequests: unknown,
+  toolNameByCallId: Map<string, string>,
+  out: string[],
+): void {
+  if (!Array.isArray(toolRequests)) return;
+  for (const req of toolRequests) {
+    if (typeof req !== 'object' || req === null) continue;
+    const rec = req as { name?: unknown; toolName?: unknown; toolCallId?: unknown };
+    const explicit = typeof rec.name === 'string' ? rec.name : (typeof rec.toolName === 'string' ? rec.toolName : '');
+    if (explicit) {
+      out.push(explicit);
+      continue;
+    }
+    const callId = typeof rec.toolCallId === 'string' ? rec.toolCallId : '';
+    if (!callId) continue;
+    const fallback = toolNameByCallId.get(callId);
+    if (fallback) out.push(fallback);
+  }
+}
+
+function buildRequestsFromTranscriptEvents(
+  events: TranscriptEvent[],
+  toolNameByCallId: Map<string, string>,
+): SessionRequest[] {
+  const requests: SessionRequest[] = [];
+  let currentUserMessage: string | null = null;
+  let currentUserTs: number | null = null;
+  let currentUserMessageId: string | null = null;
+  let responseParts: string[] = [];
+  let toolsUsed: string[] = [];
+
+  const flushTurn = () => {
+    if (currentUserMessage === null) return;
+    requests.push(createRequest({
+      requestId: currentUserMessageId ?? '',
+      timestamp: currentUserTs,
+      messageText: currentUserMessage,
+      responseText: responseParts.join('').trim(),
+      toolsUsed: [...new Set(toolsUsed)],
+      agentMode: 'agent',
+    }));
+    currentUserMessage = null;
+    currentUserTs = null;
+    currentUserMessageId = null;
+    responseParts = [];
+    toolsUsed = [];
+  };
+
+  for (const ev of events) {
+    if (ev.type === 'user.message') {
+      flushTurn();
+      currentUserMessage = typeof ev.data?.content === 'string' ? ev.data.content : '';
+      currentUserTs = ev.timestamp ? new Date(ev.timestamp).getTime() : null;
+      currentUserMessageId = ev.id ?? null;
+      continue;
+    }
+
+    if (currentUserMessage === null) continue;
+
+    if (ev.type === 'assistant.message') {
+      const content = typeof ev.data?.content === 'string' ? ev.data.content : '';
+      if (content) responseParts.push(content);
+      collectToolsFromToolRequests(ev.data?.toolRequests, toolNameByCallId, toolsUsed);
+      continue;
+    }
+
+    if (ev.type === 'tool.execution_start') {
+      const toolName = typeof ev.data?.toolName === 'string' ? ev.data.toolName : '';
+      if (toolName) toolsUsed.push(toolName);
+    }
+  }
+
+  flushTurn();
+  return requests;
+}
+
+function normalizeSessionId(raw: string | null | undefined): string {
+  return (raw ?? '').trim();
+}
+
+function unionStringArraysStable(base: string[], incoming: string[]): string[] {
+  if (incoming.length === 0) return base;
+  const out = [...base];
+  const seen = new Set(base);
+  for (const item of incoming) {
+    if (!item || seen.has(item)) continue;
+    seen.add(item);
+    out.push(item);
+  }
+  return out;
+}
+
+function mergeTranscriptIntoSession(base: Session, transcript: Session): void {
+  if (base.requests.length === transcript.requests.length) {
+    for (let i = 0; i < base.requests.length; i++) {
+      base.requests[i].toolsUsed = unionStringArraysStable(base.requests[i].toolsUsed, transcript.requests[i].toolsUsed);
+    }
+  }
+  if (base.creationDate == null && transcript.creationDate != null) {
+    base.creationDate = transcript.creationDate;
+  }
+  if (base.lastMessageDate == null && transcript.lastMessageDate != null) {
+    base.lastMessageDate = transcript.lastMessageDate;
+  }
+}
+
+function addSessionIfNew(
+  sessions: Session[],
+  byId: Map<string, number>,
+  session: Session,
+): boolean {
+  const id = normalizeSessionId(session.sessionId);
+  if (!id || byId.has(id)) return false;
+  session.sessionId = id;
+  byId.set(id, sessions.length);
+  sessions.push(session);
+  return true;
+}
+
+function addOrMergeTranscriptSession(
+  sessions: Session[],
+  byId: Map<string, number>,
+  transcript: Session,
+): boolean {
+  const id = normalizeSessionId(transcript.sessionId);
+  if (!id) return false;
+  const existingIdx = byId.get(id);
+  if (existingIdx === undefined) {
+    transcript.sessionId = id;
+    byId.set(id, sessions.length);
+    sessions.push(transcript);
+    return true;
+  }
+  mergeTranscriptIntoSession(sessions[existingIdx], transcript);
+  return false;
+}
+
 function countLinesAdded(edits: { text?: string }[] | undefined): number {
   let linesAdded = 0;
   for (const edit of (edits || [])) {
@@ -244,6 +428,7 @@ export function processWorkspaceEntry(
   const { workspaces, sessions, editLocIndex, sessionSourceIndex } = ctx;
   const startIdx = sessions.length;
   const { entryPath, wsName, isCLI, customInstructionsBytes } = initializeWorkspaceEntry(logsDir, wsId, harness, workspaces);
+  const sessionIndexById = new Map<string, number>();
 
   if (isCLI) {
     const eventsFile = path.join(entryPath, 'events.jsonl');
@@ -265,11 +450,24 @@ export function processWorkspaceEntry(
   const chatDir = path.join(entryPath, 'chatSessions');
   for (const sessionFile of listChatSessionFiles(chatDir)) {
     const session = parseSessionFile(sessionFile, wsId, wsName, harness, customInstructionsBytes);
-    if (session) {
-      sessions.push(session);
+    if (session && addSessionIfNew(sessions, sessionIndexById, session)) {
       sessionSourceIndex.set(session.sessionId, {
         kind: 'vscode-session-file',
         filePath: sessionFile,
+        workspaceId: wsId,
+        workspaceName: wsName,
+        harness,
+      });
+    }
+  }
+
+  const transcriptDir = path.join(entryPath, 'GitHub.copilot-chat', 'transcripts');
+  for (const transcriptFile of listTranscriptFiles(transcriptDir)) {
+    const transcriptSession = parseTranscriptFile(transcriptFile, wsId, wsName, harness, customInstructionsBytes);
+    if (transcriptSession && addOrMergeTranscriptSession(sessions, sessionIndexById, transcriptSession)) {
+      sessionSourceIndex.set(transcriptSession.sessionId, {
+        kind: 'vscode-session-file',
+        filePath: transcriptFile,
         workspaceId: wsId,
         workspaceName: wsName,
         harness,
@@ -311,6 +509,7 @@ export async function processWorkspaceEntryAsync(
   const { workspaces, sessions, editLocIndex, sessionSourceIndex } = ctx;
   const startIdx = sessions.length;
   const { entryPath, wsName, isCLI, customInstructionsBytes } = initializeWorkspaceEntry(logsDir, wsId, harness, workspaces);
+  const sessionIndexById = new Map<string, number>();
 
   if (isCLI) {
     const eventsFile = path.join(entryPath, 'events.jsonl');
@@ -346,9 +545,10 @@ export async function processWorkspaceEntryAsync(
   }
 
   const chatFiles = listChatSessionFiles(path.join(entryPath, 'chatSessions'));
+  const transcriptFiles = listTranscriptFiles(path.join(entryPath, 'GitHub.copilot-chat', 'transcripts'));
   const editStateFiles = listEditStateFiles(path.join(entryPath, 'chatEditingSessions'));
-  const totalUnits = Math.max(1, chatFiles.length + editStateFiles.length);
-  const chatEvery = chunkInterval(chatFiles.length);
+  const totalUnits = Math.max(1, chatFiles.length + transcriptFiles.length + editStateFiles.length);
+  const chatEvery = chunkInterval(chatFiles.length + transcriptFiles.length);
   const editEvery = chunkInterval(editStateFiles.length);
   let completed = 0;
 
@@ -360,14 +560,15 @@ export async function processWorkspaceEntryAsync(
       // Strip heavy text the moment a session is parsed so a workspace with many large
       // sessions can't accumulate its full text before the workspace finishes (issue #106).
       stripSingleSession(session);
-      sessions.push(session);
-      sessionSourceIndex.set(session.sessionId, {
-        kind: 'vscode-session-file',
-        filePath: chatFiles[i],
-        workspaceId: wsId,
-        workspaceName: wsName,
-        harness,
-      });
+      if (addSessionIfNew(sessions, sessionIndexById, session)) {
+        sessionSourceIndex.set(session.sessionId, {
+          kind: 'vscode-session-file',
+          filePath: chatFiles[i],
+          workspaceId: wsId,
+          workspaceName: wsName,
+          harness,
+        });
+      }
     }
     completed++;
     if (shouldReportChunk(i, chatFiles.length, chatEvery)) {
@@ -383,6 +584,33 @@ export async function processWorkspaceEntryAsync(
     await yieldToLoop();
     // Reclaim the file's transient parse garbage (raw text, split arrays, per-line JSON) before
     // the next file, so RSS stays under Electron's ~2GB allocator OOM ceiling (issue #106).
+    maybeForceGc();
+  }
+
+  for (let i = 0; i < transcriptFiles.length; i++) {
+    const transcriptSession = parseTranscriptFile(transcriptFiles[i], wsId, wsName, harness, customInstructionsBytes);
+    if (transcriptSession) {
+      stripSingleSession(transcriptSession);
+      if (addOrMergeTranscriptSession(sessions, sessionIndexById, transcriptSession)) {
+        sessionSourceIndex.set(transcriptSession.sessionId, {
+          kind: 'vscode-session-file',
+          filePath: transcriptFiles[i],
+          workspaceId: wsId,
+          workspaceName: wsName,
+          harness,
+        });
+      }
+    }
+    completed++;
+    if (shouldReportChunk(chatFiles.length + i, chatFiles.length + transcriptFiles.length, chatEvery)) {
+      onProgress?.({
+        wsName,
+        detail: `transcript ${i + 1}/${transcriptFiles.length}`,
+        completed,
+        total: totalUnits,
+      });
+    }
+    await yieldToLoop();
     maybeForceGc();
   }
 
@@ -515,6 +743,53 @@ export function parseSessionFile(sessionFile: string, wsId: string, wsName: stri
     lastMessageDate: lastMsgTs,
     requests: parsedRequests,
     hasDevcontainer,
+    customInstructionsBytes,
+  });
+}
+
+/**
+ * Parse VS Code Agent Debug transcripts (`GitHub.copilot-chat/transcripts/*.jsonl`)
+ * into the same session model used by the rest of the analyzer.
+ */
+export function parseTranscriptFile(
+  filePath: string,
+  wsId: string,
+  wsName: string,
+  harness: string,
+  customInstructionsBytes?: number,
+): Session | null {
+  let raw: string;
+  try {
+    raw = readFile(filePath);
+  } catch (e) {
+    debugCore('parser-vscode', `Cannot read transcript file ${filePath}`, e);
+    return null;
+  }
+
+  const events = parseTranscriptLines(raw);
+  if (events.length === 0) return null;
+
+  const sessionStart = events.find(e => e.type === 'session.start');
+  const sessionId = normalizeSessionId(
+    typeof sessionStart?.data?.sessionId === 'string'
+      ? sessionStart.data.sessionId
+      : path.basename(filePath, '.jsonl'),
+  );
+  if (!sessionId) return null;
+
+  const creationDate = sessionStart?.timestamp ? new Date(sessionStart.timestamp).getTime() : null;
+  const toolNameByCallId = buildToolNameIndex(events);
+  const requests = buildRequestsFromTranscriptEvents(events, toolNameByCallId);
+  if (requests.length === 0) return null;
+
+  return createSession({
+    sessionId,
+    workspaceId: wsId,
+    workspaceName: wsName,
+    harness,
+    location: 'panel',
+    creationDate,
+    requests,
     customInstructionsBytes,
   });
 }
