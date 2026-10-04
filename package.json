@@ -354,10 +354,10 @@
   },
   "dependencies": {
     "chart.js": "4.5.1",
-    "chartjs-chart-treemap": "4.2.0",
+    "chartjs-chart-treemap": "4.2.2",
     "htm": "3.1.1",
     "leo-profanity": "1.9.0",
     "preact": "10.29.7",
-    "zod": "4.4.3"
+    "zod": "4.6.5"
   }
 }
